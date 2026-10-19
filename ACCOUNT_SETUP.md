@@ -4,10 +4,12 @@
 
 `registrationEnabled: false` 表示邮件注册和找回密码尚未对外启用；现有账号可登录，游客仍可学习。账号入口明确显示此状态。
 
+已在控制台保存 Site URL 和精确的 Redirect URL：`https://zourong066464-cell.github.io/qiqu-learning-island/`。控制台确认 custom SMTP 尚未启用；后续需提供发信服务，并验证邮件送达。
+
 ## 剩余启用步骤
 
 1. 登录 Supabase 控制台，进入已创建的 `qiqu-learning-island` 项目。无需重复创建项目或执行首次迁移。
-2. 在 Authentication → URL Configuration，把 Site URL 及允许的 Redirect URL 设为 `https://zourong066464-cell.github.io/qiqu-learning-island/`。
+2. 回跳网址已配置完成。更换域名时再更新 Authentication → URL Configuration，并保留精确的回跳范围。
 3. 保留邮箱确认，在邮件设置配置自己的 SMTP。默认邮件服务不能直接给公众提供注册验证与找回密码；SMTP 密码只填在 Supabase 控制台，不提交到代码仓库。
 4. 使用两个真实邮箱验证邮件送达和回跳、注册、登录、密码重置及跨设备同步。确认后将 `cloud-config.js` 的 `registrationEnabled` 改为 `true` 并发布；测试期间可在本地开发配置中启用，不要把尚未验收的流程当作已完成。
 5. 再执行下列验收清单，确认后分享给学生家长。

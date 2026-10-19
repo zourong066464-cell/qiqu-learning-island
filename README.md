@@ -32,7 +32,7 @@
 
 已实现邮箱注册/验证、登录/退出、重置密码、独立昵称与进度、离线暂存、同步状态及版本冲突选择。每个家长邮箱对应一个孩子档案。
 
-启用步骤见 [ACCOUNT_SETUP.md](ACCOUNT_SETUP.md)。Supabase 项目和数据库迁移已完成，前端已配置公开连接信息。尚需在控制台配置本站的登录回跳网址和邮件服务，并完成真实注册验收后，将 `registrationEnabled` 改为 `true`。游客记录不会自动并入新账号。
+启用步骤见 [ACCOUNT_SETUP.md](ACCOUNT_SETUP.md)。Supabase 项目和数据库迁移已完成，前端已配置公开连接信息。本站的登录回跳网址已配置。尚需配置邮件服务，并完成真实注册验收后，将 `registrationEnabled` 改为 `true`。游客记录不会自动并入新账号。
 
 验证：`node --test tests/cloud.test.cjs` 测试账号切换、网络中断、同步竞争和会话刷新；`node tests/game.test.cjs` 测试原有答题与备份逻辑。账号测试使用模拟接口，不能替代真实服务验收。数据库行级权限测试见 `supabase/tests/isolation.sql`，此外已在真实项目使用事务回滚验证用户隔离、写入权限、版本检查和游客拒绝访问，未保留测试数据。完整邮件注册、密码重置与跨设备登录仍待邮件服务配置后验收。
 
