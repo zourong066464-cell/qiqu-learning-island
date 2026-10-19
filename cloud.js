@@ -6,8 +6,11 @@
       this.config = config || {};
       this.hooks = hooks;
       this.fetch = deps.fetch || root.fetch.bind(root);
-      this.local = deps.local || root.localStorage;
-      this.tokens = deps.tokens || root.sessionStorage;
+      const storage = name => { try { return root[name]; } catch { return {getItem:()=>null,removeItem:()=>{},setItem:()=>{throw Error('Storage unavailable');}}; } };
+      this.local = deps.local || storage('localStorage');
+      this.tokens = deps.tokens || storage('sessionStorage');
+      this.location = deps.location || root.location;
+      this.navigation = deps.history || root.history;
       this.auth = null; this.doc = null; this.version = 0;
       this.dirty = false; this.revision = 0; this.epoch = 0;
       this.conflict = null; this.loaded = false; this.flight = null;
@@ -23,7 +26,7 @@
     cache() {
       if (!this.auth || !this.loaded) return;
       try { this.local.setItem(this.cacheKey(), JSON.stringify({state:this.doc,version:this.version,dirty:this.dirty})); }
-      catch { this.hooks.warning?.('此浏览器无法保存离线记录，请保持联网并等待同步完成。'); }
+      catch { if(!this.cacheWarningShown){this.cacheWarningShown=true;this.hooks.warning?.('此浏览器无法保存离线记录，请保持联网并等待同步完成。');} }
     }
     setAuth(data) {
       if (!data.access_token || !data.refresh_token || !data.user?.id) throw Error('登录信息不完整，请重新登录。');
@@ -58,6 +61,8 @@
       if (code === 'email_not_confirmed') return '请先打开注册邮件，完成邮箱验证后再登录。';
       if (code === 'user_already_exists') return '注册请求未完成，请尝试登录或找回密码。';
       if (code === 'weak_password') return '密码强度不足，请使用更长的密码。';
+      if (code === 'email_address_not_authorized' || code === 'email_address_not_authorized_for_testing') return '注册邮件服务尚未开放，请联系应用管理员。';
+      if (code === 'otp_expired') return '验证链接已过期，请重新发送验证邮件。';
       if (status === 429) return '操作太频繁，请稍后重试。';
       if (status === 401 || status === 403) return '登录已失效或没有访问权限，请重新登录。';
       if (code === '42P01' || code === 'PGRST205') return '云端数据表尚未初始化，请联系应用管理员。';
@@ -69,22 +74,28 @@
       if (this.auth.expires_at > Date.now()/1000+60) return this.auth.access_token;
       if (!this.refreshFlight) {
         const epoch = this.epoch, refresh = this.auth.refresh_token;
-        this.refreshFlight = this.request('/auth/v1/token?grant_type=refresh_token', {method:'POST',body:{refresh_token:refresh}})
+        const flight = this.request('/auth/v1/token?grant_type=refresh_token', {method:'POST',body:{refresh_token:refresh}})
           .then(data=>{if(epoch !== this.epoch) throw Error('账号已切换。'); this.setAuth(data); return data.access_token;})
-          .finally(()=>{this.refreshFlight = null;});
+          .finally(()=>{if(this.refreshFlight===flight)this.refreshFlight = null;});
+        this.refreshFlight = flight;
       }
       return this.refreshFlight;
     }
     async start() {
       if (!this.enabled) { this.emit('unconfigured'); return; }
-      const fragment = new URLSearchParams(root.location?.hash?.slice(1) || '');
+      const epoch=this.epoch;
+      const fragment = new URLSearchParams(this.location?.hash?.slice(1) || '');
+      if(fragment.has('error')) {
+        this.navigation?.replaceState(null,'',this.location.pathname+this.location.search);
+        this.hooks.warning?.('验证链接无效或已过期，请重新申请。');
+      }
       const callback = fragment.get('access_token') && fragment.get('refresh_token');
       let saved;
       if (callback) {
         saved = {access_token:fragment.get('access_token'),refresh_token:fragment.get('refresh_token'),
           expires_at:Date.now()/1000+Number(fragment.get('expires_in') || 3600)};
         // Strip credentials before any UI or further navigation.
-        root.history?.replaceState(null, '', root.location.pathname + root.location.search);
+        this.navigation?.replaceState(null, '', this.location.pathname + this.location.search);
       } else {
         try { saved = JSON.parse(this.tokens.getItem(this.authKey)); } catch { /* signed out */ }
       }
@@ -94,13 +105,15 @@
         this.auth = saved;
         const token = await this.access();
         const user = await this.request('/auth/v1/user', {token});
+        if(epoch!==this.epoch)return;
         this.setAuth({...this.auth,user});
         await this.load();
-        if (callback && fragment.get('type') === 'recovery') this.hooks.recovery?.();
+        if (epoch===this.epoch && callback && fragment.get('type') === 'recovery') this.hooks.recovery?.();
       } catch (err) {
+        if(epoch!==this.epoch)return;
         if (err.offline && this.auth?.user?.id && this.loadCache()) this.emit('offline');
         else { this.clear(); this.emit('guest'); this.hooks.warning?.(err.message); }
-      } finally { this.hooks.busy?.(false); }
+      } finally { if(epoch===this.epoch)this.hooks.busy?.(false); }
     }
     loadCache() {
       try {
@@ -114,17 +127,23 @@
     async signIn(email, password) {
       if (!this.enabled) throw Error('管理员尚未启用云端账号。');
       if (this.auth) throw Error('请先退出当前账号。');
-      this.hooks.busy?.(true); this.epoch++;
+      const epoch=++this.epoch;
+      this.hooks.busy?.(true);
       try {
         const data = await this.request('/auth/v1/token?grant_type=password', {method:'POST',body:{email,password}});
+        if(epoch!==this.epoch)throw Error('登录操作已取消。');
         this.setAuth(data);
         await this.load();
-      } catch (err) { this.clear(); this.emit('guest'); throw err; }
-      finally { this.hooks.busy?.(false); }
+      } catch (err) { if(epoch===this.epoch){this.clear();this.emit('guest');}throw err; }
+      finally { if(epoch===this.epoch)this.hooks.busy?.(false); }
     }
-    redirect() { return root.location.origin + root.location.pathname; }
+    redirect() {
+      if(this.location?.protocol!=='https:' && !['localhost','127.0.0.1'].includes(this.location?.hostname))throw Error('注册和找回密码请使用在线学习岛网址。');
+      return this.location.origin + this.location.pathname;
+    }
     async signUp(email, password, nickname) {
       if (!this.enabled) throw Error('管理员尚未启用云端账号。');
+      if(this.config.registrationEnabled===false)throw Error('注册邮件服务尚未启用，暂时无法创建新账号。');
       const data = await this.request('/auth/v1/signup?redirect_to='+encodeURIComponent(this.redirect()),
         {method:'POST',body:{email,password,data:{nickname}}});
       // Account creation never copies the guest's record into a new user implicitly.
@@ -132,6 +151,7 @@
       return false;
     }
     async recover(email) {
+      if(this.config.registrationEnabled===false)throw Error('邮件找回功能尚未启用，请联系管理员。');
       return this.request('/auth/v1/recover?redirect_to='+encodeURIComponent(this.redirect()), {method:'POST',body:{email}});
     }
     async changePassword(password) {
@@ -171,8 +191,9 @@
     async flush() {
       if (this.flight) return this.flight;
       if (!this.auth || !this.loaded || !this.dirty || this.conflict) return;
-      this.flight = this.push().finally(()=>{this.flight = null;});
-      return this.flight;
+      const flight=this.push().finally(()=>{if(this.flight===flight)this.flight=null;});
+      this.flight=flight;
+      return flight;
     }
     async push() {
       const epoch = this.epoch;
@@ -192,8 +213,8 @@
           }
           if (epoch !== this.epoch) return;
           if (!Array.isArray(rows) || !rows.length) {
-            this.conflict = await this.read();
-            if (epoch === this.epoch) this.emit('conflict'); return;
+            const remote=await this.read();
+            if (epoch === this.epoch) {this.conflict=remote;this.emit('conflict');}return;
           }
           this.version = rows[0].version;
           this.dirty = revision !== this.revision; this.cache();
@@ -205,11 +226,13 @@
       }
     }
     async sync() {
+      if(!this.auth || !this.loaded)return;
       if (this.conflict) return;
       if (this.dirty) return this.flush();
+      const epoch=this.epoch;
       this.hooks.busy?.(true);
       try { await this.load(); } catch(err) { this.emit(err.offline?'offline':'error'); this.hooks.warning?.(err.message); }
-      finally { this.hooks.busy?.(false); }
+      finally { if(epoch===this.epoch)this.hooks.busy?.(false); }
     }
     async resolve(useLocal) {
       if (!this.conflict) return;
@@ -221,7 +244,9 @@
     clear() {
       clearTimeout(this.timer); this.epoch++; this.auth=null; this.loaded=false;
       this.doc=null; this.version=0; this.dirty=false; this.conflict=null;
+      this.flight=null;this.refreshFlight=null;this.revision=0;
       try { this.tokens.removeItem(this.authKey); } catch { /* no session persistence */ }
+      this.hooks.busy?.(false);
       this.hooks.guest?.();
     }
     async signOut(discard=false) {

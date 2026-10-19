@@ -15,10 +15,12 @@
   window.renderAccount = renderAccount;
   function renderAccount() {
     $('#nickname-display').textContent=state.nickname;
+    $('#profile-avatar').textContent=state.avatar;
+    $('#profile-avatar-select').value=state.avatar;
     if(document.activeElement!==$('#nickname')) $('#nickname').value=state.nickname;
-    $('#account').textContent=cloud.auth ? '♙ '+state.nickname : '♙ 登录 / 注册';
+    $('#account').textContent=cloud.auth ? state.avatar+' '+state.nickname : '♙ 我的账号';
     $('#account-description').textContent=cloud.auth ? '已登录 · '+cloud.auth.user.email : '游客模式，记录保存在本机。';
-    $('#sync-status').textContent=labels[cloud.status] || '';
+    $('#sync-status').textContent=cloud.status==='guest'&&cloud.enabled&&cloud.config.registrationEnabled===false?'云端已连接 · 邮件注册待启用':labels[cloud.status] || '';
     const live=$('#account-live-status'); if(live)live.textContent=labels[cloud.status] || '';
   }
   function accountDialog() {
@@ -36,9 +38,16 @@
     $('#sign-out').onclick=signOutDialog;
   }
   function authForm(mode) {
+    if((mode==='signup'||mode==='recover')&&cloud.config.registrationEnabled===false){
+      show('邮件服务待启用','<div class="account-card"><strong>云端学习档案已准备好</strong><p>管理员还在配置注册验证邮件，暂时无法注册新账号或发送密码重置邮件。现有账号可以继续登录。</p><p>现在可以先以游客身份探索；原有游客记录会保留，之后可以选择复制到自己的账号。</p></div><div class="account-actions"><button class="primary" id="service-guest">先以游客探索</button><button class="secondary" id="service-login">已有账号，去登录</button></div>');
+      $('#service-guest').onclick=hide;$('#service-login').onclick=()=>authForm('login');return;
+    }
     const signup=mode==='signup', recover=mode==='recover';
     show(signup?'注册一个学习账号':recover?'找回密码':'欢迎回到学习岛',`<p class="account-tip">请由家长使用邮箱操作。孩子使用昵称即可，无需填写真实姓名。</p><form class="account-form" id="auth-form"><label>家长邮箱<input type="email" id="auth-email" autocomplete="email" maxlength="254" required></label>${signup?'<label>孩子的昵称<input id="auth-nickname" autocomplete="nickname" minlength="1" maxlength="20" required placeholder="例如：小橙子"></label>':''}${recover?'':`<label>密码<input type="password" id="auth-password" autocomplete="${signup?'new-password':'current-password'}" minlength="${signup?'8':'1'}" maxlength="128" required ${signup?'placeholder="至少 8 位，建议混合字母和数字"':''}></label>`}${signup?'<label>再次输入密码<input type="password" id="auth-confirm" autocomplete="new-password" minlength="8" maxlength="128" required></label>':''}<div id="auth-message" class="account-message" role="status"></div><button class="primary" type="submit" id="auth-submit">${signup?'注册账号':recover?'发送重置邮件':'登录我的小岛'}</button></form><div class="account-actions"><button class="text-btn" id="switch-auth">${signup||recover?'已有账号，去登录':'没有账号，去注册'}</button>${!signup&&!recover?'<button class="text-btn" id="forgot-password">忘记密码</button>':''}<button class="text-btn" id="guest-mode">先以游客探索</button></div>`);
     $('#switch-auth').onclick=()=>authForm(signup||recover?'login':'signup');
+    if(!signup&&!recover&&cloud.config.registrationEnabled===false){
+      $('#auth-message').textContent='云端已连接。注册验证邮件仍在配置，当前仅供已有账号登录。';
+    }
     if($('#forgot-password'))$('#forgot-password').onclick=()=>authForm('recover');
     $('#guest-mode').onclick=hide;
     const form=$('#auth-form'), message=$('#auth-message'), submit=$('#auth-submit');
@@ -83,7 +92,8 @@
   }
   $('#account').onclick=accountDialog;$('#manage-account').onclick=accountDialog;
   $('#nickname').onchange=event=>{const value=event.target.value.trim();if(!value){event.target.value=state.nickname;toast('昵称不能为空。');return;}state.nickname=value.slice(0,20);save();};
+  $('#profile-avatar-select').onchange=event=>{if(avatars.includes(event.target.value)){state.avatar=event.target.value;save();}};
   window.addEventListener('online',()=>{if(cloud.auth)cloud.flush();});
-  document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&cloud.auth&&cloud.loaded)cloud.flush();});
+  document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&cloud.auth&&cloud.loaded&&!session&&!busy)cloud.sync();});
   renderAccount();cloud.start();
 })();

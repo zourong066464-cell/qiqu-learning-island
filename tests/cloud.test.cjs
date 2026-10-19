@@ -89,3 +89,41 @@ test('expired session refreshes once for concurrent authenticated requests',asyn
   const s=server(),c=client(s);await c.cloud.signIn('a@example.test','correct');c.cloud.auth.expires_at=0;
   const tokens=await Promise.all([c.cloud.access(),c.cloud.access()]);assert.deepEqual(tokens,['a:access','a:access']);await c.cloud.signOut();
 });
+test('an old account write finishing cannot clear the new account write',async()=>{
+  const s=server(),c=client(s);await c.cloud.signIn('a@example.test','correct');
+  let releaseA,releaseB;
+  s.hold(new Promise(resolve=>releaseA=resolve));
+  c.cloud.save({...initial('Apple'),stars:8});const oldWrite=c.cloud.flush();
+  await new Promise(resolve=>setImmediate(resolve));await c.cloud.signOut(true);
+  await c.cloud.signIn('b@example.test','correct');
+  s.hold(new Promise(resolve=>releaseB=resolve));
+  c.cloud.save({...initial('Banana'),stars:4});const newWrite=c.cloud.flush();
+  await new Promise(resolve=>setImmediate(resolve));const currentFlight=c.cloud.flight;
+  releaseA();await oldWrite;assert.equal(c.cloud.flight,currentFlight);
+  releaseB();await newWrite;assert.equal(s.rows.get('user-b').state.stars,4);assert.equal(c.cloud.status,'synced');await c.cloud.signOut();
+});
+test('reloading offline restores only the authenticated account and later syncs edits',async()=>{
+  const s=server(),first=client(s);await first.cloud.signIn('a@example.test','correct');
+  first.cloud.save({...initial('Apple'),stars:6});await first.cloud.flush();
+  s.offline=true;const reopened=client(s,first.local,first.tokens);await reopened.cloud.start();
+  assert.equal(reopened.cloud.status,'offline');assert.equal(reopened.displayed.stars,6);assert.equal(reopened.cloud.auth.user.id,'user-a');
+  reopened.cloud.save({...initial('Apple'),stars:7});await reopened.cloud.flush();
+  s.offline=false;await reopened.cloud.flush();assert.equal(s.rows.get('user-a').state.stars,7);await reopened.cloud.signOut();first.cloud.clear();
+});
+test('recovery callback strips URL credentials and validates identity before opening reset form',async()=>{
+  const s=server(),local=storage(),tokens=storage();let recovered=0;const navigations=[];
+  const cloud=new IslandCloud(config,{initial,validate,recovery:()=>recovered++},{fetch:s.fetch,local,tokens,
+    location:{origin:'https://example.test',protocol:'https:',pathname:'/island/',search:'',hash:'#access_token=a:access&refresh_token=a:refresh&expires_in=3600&type=recovery'},
+    history:{replaceState:(_state,_title,url)=>navigations.push(url)}});
+  await cloud.start();assert.deepEqual(navigations,['/island/']);assert.equal(cloud.auth.user.id,'user-a');assert.equal(recovered,1);await cloud.signOut();
+});
+test('mail setup gate blocks registration and recovery without sending network requests',async()=>{
+  let calls=0;const cloud=new IslandCloud({...config,registrationEnabled:false},{initial,validate},{local:storage(),tokens:storage(),fetch:async()=>{calls++;throw Error('should not send');}});
+  await assert.rejects(cloud.signUp('a@example.test','password123','Apple'),/邮件服务尚未启用/);
+  await assert.rejects(cloud.recover('a@example.test'),/邮件找回功能尚未启用/);assert.equal(calls,0);
+});
+test('returning to an idle signed-in device refreshes its clean cloud profile',async()=>{
+  const s=server(),a=client(s),b=client(s);await a.cloud.signIn('a@example.test','correct');await b.cloud.signIn('a@example.test','correct');
+  a.cloud.save({...initial('Apple'),stars:9});await a.cloud.flush();await b.cloud.sync();assert.equal(b.displayed.stars,9);
+  await a.cloud.signOut();await b.cloud.signOut();
+});
